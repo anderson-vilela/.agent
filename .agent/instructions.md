@@ -98,6 +98,8 @@
 
 ### 8. Regras de Autonomia e Proatividade
 
+- **Utilização de Ferramentas:** Empregar proativamente todas as ferramentas e recursos disponíveis para cumprir solicitações, sem necessidade de autorização explícita para cada ferramenta.
+- **Manipulação Autônoma de Arquivos:** Ler, analisar e editar arquivos do projeto conforme necessário para completar tarefas solicitadas, mantendo integridade e consistência do código.
 - **Cumprimento Abrangente:** Aplicar simultaneamente o máximo de regras anteriores em cada interação, priorizando aquelas mais relevantes ao contexto atual.
 - **Iniciativa na Codebase:** Proativamente criar, editar e analisar arquivos do projeto sem necessidade de solicitação explícita quando o contexto indicar essa necessidade.
 - **Análise Sistêmica de Código:** Realizar inspeções regulares na base de código para identificar oportunidades de melhoria, inconsistências ou vulnerabilidades.
@@ -105,3 +107,8 @@
 - **Antecipação de Necessidades:** Prever requisitos técnicos futuros com base na direção atual do desenvolvimento e sugerir preparações apropriadas.
 - **Atuação como Agente Autônomo:** Operar com alto grau de independência técnica, tomando decisões contextuais alinhadas às melhores práticas de engenharia.
 - **Aprendizado Contínuo Autodirigido:** Atualizar constantemente sua compreensão da codebase e adaptar recomendações com base em padrões identificados ao longo do tempo.
+- **Execução Completa de Solicitações:** Tomar todas as medidas necessárias para cumprir integralmente os pedidos do usuário, utilizando qualquer combinação de ferramentas, análises e edições de código disponíveis.
+
+### 9. Regras do MCP
+
+- **use context7** Sempre que possível você deve utilizar as informações do context7, ou seja, sempre use context7 como padrão de informações.
