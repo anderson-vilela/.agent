@@ -524,6 +524,7 @@ export async function generateMetadata({
     title: `${post.title} | Blog`,
     description: post.excerpt,
     openGraph: post.imageUrl
+      ? post.imageUrl
       ? {
           images: [post.imageUrl],
         }
@@ -1166,7 +1167,6 @@ export function useCart() {
     mutate,
   } = useSWR<Cart>(CART_API_URL, fetcher, {
     refreshInterval: 0, // Não atualizar automaticamente
-    revalidateOnFocus: false, // Não atualizar ao focar na página
     dedupingInterval: 60000, // Deduplicar requisições em 1 minuto
   });
 
@@ -1438,6 +1438,681 @@ async function PopularProductsContainer() {
 }
 ```
 
+### 10. Estratégias para Lidar com Timeouts em Requisições
+
+Em ambientes de produção, é essencial implementar um tratamento adequado para timeouts em requisições, especialmente em operações críticas:
+
+```typescript
+// lib/api/fetch-with-timeout.ts
+import { z } from "zod";
+
+interface FetchOptions extends RequestInit {
+  /**
+   * Timeout em milissegundos
+   * @default 10000 (10 segundos)
+   */
+  timeoutMs?: number;
+
+  /**
+   * Número de tentativas em caso de falha
+   * @default 1 (sem retry)
+   */
+  retries?: number;
+
+  /**
+   * Tempo de espera entre tentativas (ms)
+   * @default 1000 (1 segundo)
+   */
+  retryDelay?: number;
+
+  /**
+   * Esquema Zod para validação da resposta
+   */
+  schema?: z.ZodType<any>;
+}
+
+/**
+ * Realiza uma requisição fetch com timeout e retries
+ */
+export async function fetchWithTimeout<T>(
+  url: string,
+  options: FetchOptions = {}
+): Promise<T> {
+  const {
+    timeoutMs = 10000,
+    retries = 1,
+    retryDelay = 1000,
+    schema,
+    ...fetchOptions
+  } = options;
+
+  let lastError: Error | null = null;
+  let attempt = 0;
+
+  while (attempt < retries) {
+    try {
+      attempt++;
+
+      // Criar um controlador para abortar a requisição
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      const response = await fetch(url, {
+        ...fetchOptions,
+        signal: controller.signal,
+      });
+
+      // Limpar o timeout
+      clearTimeout(timeoutId);
+
+      // Se a resposta não for bem-sucedida, lançar erro
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Request failed with status ${response.status}: ${errorText}`
+        );
+      }
+
+      // Parse da resposta
+      const data = await response.json();
+
+      // Validar com Zod se um esquema foi fornecido
+      if (schema) {
+        return schema.parse(data);
+      }
+
+      return data as T;
+    } catch (error) {
+      lastError = error as Error;
+
+      // Se for o último retry ou erro de timeout, não tentar novamente
+      if (
+        attempt >= retries ||
+        (error instanceof DOMException && error.name === "AbortError")
+      ) {
+        // Registrar erro em sistema de observabilidade
+        reportFetchError({
+          url,
+          attempt,
+          error: lastError,
+          isTimeout: lastError.name === "AbortError",
+        });
+
+        throw new Error(
+          `Request failed after ${attempt} attempts: ${lastError.message}`
+        );
+      }
+
+      // Aguardar antes de tentar novamente
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+    }
+  }
+
+  // Fallback (nunca deveria chegar aqui por causa do loop)
+  throw lastError || new Error("Unknown error during fetch");
+}
+
+/**
+ * Reporta erros para um sistema de observabilidade
+ */
+function reportFetchError(data: {
+  url: string;
+  attempt: number;
+  error: Error;
+  isTimeout: boolean;
+}) {
+  // Integração com sistemas reais como Sentry, New Relic, DataDog, etc.
+  console.error(`Fetch error (attempt ${data.attempt}):`, {
+    url: data.url,
+    error: data.error.message,
+    isTimeout: data.isTimeout,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Exemplo para Sentry
+  if (typeof window !== "undefined" && window.Sentry) {
+    window.Sentry.captureException(data.error, {
+      tags: {
+        source: "fetch-with-timeout",
+        isTimeout: data.isTimeout,
+        attempt: data.attempt,
+      },
+      extra: {
+        url: data.url,
+      },
+    });
+  }
+}
+```
+
+#### Exemplos de Uso
+
+```typescript
+// lib/api/products.ts
+import { z } from "zod";
+import { fetchWithTimeout } from "./fetch-with-timeout";
+
+// Definir schema para validação de resposta
+const productSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  price: z.number().positive(),
+  description: z.string().optional(),
+  imageUrl: z.string().url().optional(),
+});
+
+const productsResponseSchema = z.object({
+  products: z.array(productSchema),
+  totalCount: z.number(),
+});
+
+export type Product = z.infer<typeof productSchema>;
+
+export async function getProductById(id: string): Promise<Product> {
+  try {
+    return await fetchWithTimeout<Product>(
+      `${process.env.NEXT_PUBLIC_API_URL}/products/${id}`,
+      {
+        timeoutMs: 5000, // 5 segundos
+        retries: 2,
+        schema: productSchema,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  } catch (error) {
+    console.error(`Error fetching product ${id}:`, error);
+    throw new Error(
+      `Failed to fetch product: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`
+    );
+  }
+}
+
+export async function searchProducts(
+  query: string,
+  page: number = 1
+): Promise<{ products: Product[]; totalCount: number }> {
+  try {
+    return await fetchWithTimeout(
+      `${
+        process.env.NEXT_PUBLIC_API_URL
+      }/products/search?q=${encodeURIComponent(query)}&page=${page}`,
+      {
+        timeoutMs: 8000, // 8 segundos
+        retries: 2,
+        schema: productsResponseSchema,
+      }
+    );
+  } catch (error) {
+    console.error(`Error searching products with query "${query}":`, error);
+    // Fallback para operações críticas
+    return { products: [], totalCount: 0 };
+  }
+}
+```
+
+#### Uso em Componentes
+
+```typescript
+// app/products/[id]/page.tsx
+import { getProductById } from "@/lib/api/products";
+import { ProductDetails } from "./_components/ProductDetails";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { Suspense } from "react";
+
+export default async function ProductPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  try {
+    const product = await getProductById(params.id);
+
+    return (
+      <div className="container py-8">
+        <ErrorBoundary fallback={<ProductFallback id={params.id} />}>
+          <Suspense fallback={<ProductSkeleton />}>
+            <ProductDetails product={product} />
+          </Suspense>
+        </ErrorBoundary>
+      </div>
+    );
+  } catch (error) {
+    // Log detalhado antes de mostrar erro para usuário
+    console.error(`Product page error for ID ${params.id}:`, error);
+
+    // Retornar componente de erro
+    return (
+      <ProductError
+        id={params.id}
+        error={error instanceof Error ? error.message : "Unknown error"}
+      />
+    );
+  }
+}
+```
+
+### 11. Integração com Ferramentas de Observabilidade
+
+Monitorar o desempenho e erros em busca de dados é crucial para manter a confiabilidade da aplicação:
+
+```typescript
+// lib/monitoring/api-metrics.ts
+type MetricType = "success" | "error" | "timeout" | "cache_hit" | "cache_miss";
+
+interface ApiMetric {
+  endpoint: string;
+  duration: number;
+  type: MetricType;
+  status?: number;
+  cached?: boolean;
+  timeoutThreshold?: number;
+}
+
+let metrics: ApiMetric[] = [];
+const FLUSH_INTERVAL = 10000; // 10 seconds
+
+export function recordApiMetric(metric: ApiMetric) {
+  metrics.push(metric);
+
+  // Para desenvolvimento, log imediato
+  if (process.env.NODE_ENV === "development") {
+    console.info(
+      `API Metric [${metric.type}]: ${metric.endpoint} - ${metric.duration}ms`
+    );
+  }
+}
+
+export function setupMetricsReporting() {
+  if (typeof window === "undefined") return; // Server-side
+
+  // Configurar envio periódico de métricas
+  setInterval(() => {
+    if (metrics.length === 0) return;
+
+    const metricsToSend = [...metrics];
+    metrics = [];
+
+    // Enviar métricas para backend
+    fetch("/api/telemetry/api-metrics", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ metrics: metricsToSend }),
+      keepalive: true,
+    }).catch((error) => {
+      console.error("Failed to send API metrics:", error);
+      // Adicionar de volta ao array em caso de falha
+      metrics = [...metrics, ...metricsToSend];
+    });
+  }, FLUSH_INTERVAL);
+}
+
+/**
+ * Wrapper para funções de API com telemetria automática
+ */
+export function withApiMetrics<T extends (...args: any[]) => Promise<any>>(
+  fn: T,
+  options: {
+    name: string;
+    timeout?: number;
+  }
+): T {
+  return (async (...args: Parameters<T>) => {
+    const startTime = performance.now();
+    let metricType: MetricType = "success";
+    let status: number | undefined = undefined;
+
+    try {
+      // Configurar timeout se especificado
+      let timeoutId: NodeJS.Timeout | undefined;
+      const timeoutPromise = options.timeout
+        ? new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+              metricType = "timeout";
+              reject(
+                new Error(
+                  `API call to ${options.name} timed out after ${options.timeout}ms`
+                )
+              );
+            }, options.timeout);
+          })
+        : null;
+
+      // Executar a função original
+      const resultPromise = fn(...args);
+
+      // Race entre resultado e timeout
+      const result = await (timeoutPromise
+        ? Promise.race([resultPromise, timeoutPromise])
+        : resultPromise);
+
+      // Limpar timeout se definido
+      if (timeoutId) clearTimeout(timeoutId);
+
+      return result;
+    } catch (error) {
+      metricType = error.message?.includes("timed out") ? "timeout" : "error";
+
+      if (error.response) {
+        status = error.response.status;
+      }
+
+      throw error;
+    } finally {
+      const duration = performance.now() - startTime;
+
+      recordApiMetric({
+        endpoint: options.name,
+        duration,
+        type: metricType,
+        status,
+        timeoutThreshold: options.timeout,
+      });
+    }
+  }) as T;
+}
+```
+
+#### Implementação em Serviços API
+
+```typescript
+// lib/api/analytics.ts
+import { withApiMetrics } from "@/lib/monitoring/api-metrics";
+
+const ANALYTICS_ENDPOINT = "/api/analytics";
+
+async function _fetchDashboardData(dateRange: string) {
+  const response = await fetch(
+    `${ANALYTICS_ENDPOINT}/dashboard?range=${dateRange}`
+  );
+
+  if (!response.ok) {
+    throw new Error(`Analytics API error: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Versão instrumentada com métricas
+export const fetchDashboardData = withApiMetrics(_fetchDashboardData, {
+  name: "fetchDashboardData",
+  timeout: 15000, // 15 segundos
+});
+
+// Configure o sistema no layout principal
+// app/layout.tsx
+import { setupMetricsReporting } from "@/lib/monitoring/api-metrics";
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  // Configurar sistema de métricas no cliente
+  useEffect(() => {
+    setupMetricsReporting();
+  }, []);
+
+  return (
+    <html lang="pt-BR">
+      <head />
+      <body>{children}</body>
+    </html>
+  );
+}
+```
+
+#### Endpoint para Receber Métricas
+
+```typescript
+// app/api/telemetry/api-metrics/route.ts
+import { NextRequest, NextResponse } from "next/server";
+
+export async function POST(request: NextRequest) {
+  try {
+    const { metrics } = await request.json();
+
+    // Em produção, enviar para sistema de monitoramento
+    if (process.env.NODE_ENV === "production") {
+      await sendToMonitoringSystem(metrics);
+    } else {
+      // Em desenvolvimento, apenas log
+      console.info("API Metrics received:", metrics);
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Error processing API metrics:", error);
+    return NextResponse.json(
+      { error: "Failed to process metrics" },
+      { status: 500 }
+    );
+  }
+}
+
+// Função para enviar métricas para sistema de monitoramento
+async function sendToMonitoringSystem(metrics: any[]) {
+  // Implementação real enviaria para New Relic, Datadog, Prometheus, etc.
+  // Exemplo para DataDog:
+  try {
+    const datapoints = metrics.map((metric) => ({
+      metric: `api.${metric.type}`,
+      points: [[Date.now() / 1000, metric.duration]],
+      tags: [
+        `endpoint:${metric.endpoint}`,
+        `status:${metric.status || "unknown"}`,
+        `cached:${metric.cached || false}`,
+      ],
+    }));
+
+    await fetch(`${process.env.DATADOG_API_URL}/series`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "DD-API-KEY": process.env.DATADOG_API_KEY as string,
+      },
+      body: JSON.stringify({ series: datapoints }),
+    });
+  } catch (error) {
+    console.error("Failed to send metrics to monitoring system:", error);
+  }
+}
+```
+
+### 12. Gerenciamento Seguro de Chaves de API
+
+```typescript
+// lib/api/security.ts
+import { encrypt, decrypt } from "@/lib/crypto";
+
+/**
+ * Gerencia chaves de API seguras para uso em Data Fetching
+ * - Para APIs do lado servidor, as chaves são armazenadas em variáveis de ambiente
+ * - Para APIs do lado cliente, as chaves são criptografadas no localStorage com rotação automática
+ */
+export class ApiKeyManager {
+  private static instance: ApiKeyManager;
+  private keys: Map<string, string> = new Map();
+
+  private constructor() {
+    // Singleton
+  }
+
+  public static getInstance(): ApiKeyManager {
+    if (!ApiKeyManager.instance) {
+      ApiKeyManager.instance = new ApiKeyManager();
+    }
+
+    return ApiKeyManager.instance;
+  }
+
+  /**
+   * Obtém uma chave de API com base no nome do serviço
+   */
+  public async getApiKey(service: string): Promise<string> {
+    // Para chaves do lado servidor, usar variáveis de ambiente
+    if (typeof window === "undefined") {
+      const envKey = process.env[`API_KEY_${service.toUpperCase()}`];
+
+      if (!envKey) {
+        throw new Error(
+          `API key for service "${service}" not found in environment variables`
+        );
+      }
+
+      return envKey;
+    }
+
+    // Para chaves do lado cliente, usar localStorage com criptografia
+    if (this.keys.has(service)) {
+      return this.keys.get(service)!;
+    }
+
+    try {
+      // Tentar carregar do localStorage
+      const encryptedKey = localStorage.getItem(
+        `api_key_${service.toLowerCase()}`
+      );
+
+      if (encryptedKey) {
+        // Descriptografar usando uma chave derivada da sessão do usuário
+        const decryptedKey = await decrypt(encryptedKey);
+        this.keys.set(service, decryptedKey);
+        return decryptedKey;
+      }
+    } catch (error) {
+      console.error(`Error loading API key for service "${service}":`, error);
+    }
+
+    // Se não encontrada, solicitar via servidor
+    return this.fetchApiKey(service);
+  }
+
+  /**
+   * Solicita uma chave temporária do servidor para uso no cliente
+   * O servidor irá gerar uma chave com permissões limitadas e validade curta
+   */
+  private async fetchApiKey(service: string): Promise<string> {
+    try {
+      const response = await fetch(`/api/auth/api-keys/${service}`, {
+        method: "POST",
+        credentials: "include", // Incluir cookies para autenticação
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch API key: ${response.statusText}`);
+      }
+
+      const { key, expiresAt } = await response.json();
+
+      // Criptografar e armazenar localmente
+      const encryptedKey = await encrypt(key);
+      localStorage.setItem(`api_key_${service.toLowerCase()}`, encryptedKey);
+      localStorage.setItem(
+        `api_key_${service.toLowerCase()}_expires`,
+        expiresAt
+      );
+
+      this.keys.set(service, key);
+
+      // Configurar rotação automática antes da expiração
+      const expiryDate = new Date(expiresAt).getTime();
+      const now = Date.now();
+      const timeToExpiry = expiryDate - now;
+
+      if (timeToExpiry > 0) {
+        // Rotacionar 5 minutos antes de expirar
+        setTimeout(() => {
+          this.keys.delete(service);
+          this.fetchApiKey(service).catch(console.error);
+        }, timeToExpiry - 5 * 60 * 1000);
+      }
+
+      return key;
+    } catch (error) {
+      console.error(`Error fetching API key for service "${service}":`, error);
+      throw new Error(`Unable to obtain API key for "${service}"`);
+    }
+  }
+
+  /**
+   * Limpa todas as chaves armazenadas (útil para logout)
+   */
+  public clearKeys(): void {
+    this.keys.clear();
+
+    if (typeof window !== "undefined") {
+      Object.keys(localStorage).forEach((key) => {
+        if (key.startsWith("api_key_")) {
+          localStorage.removeItem(key);
+        }
+      });
+    }
+  }
+}
+
+// Uso simplificado
+export async function getApiKeyFor(service: string): Promise<string> {
+  return ApiKeyManager.getInstance().getApiKey(service);
+}
+```
+
+#### Endpoint para Geração Segura de Chaves Temporárias
+
+```typescript
+// app/api/auth/api-keys/[service]/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { getSession } from "@/lib/auth/session";
+import { generateTemporaryApiKey } from "@/lib/api/key-generator";
+
+export async function POST(
+  request: NextRequest,
+  { params }: { params: { service: string } }
+) {
+  try {
+    // Verificar autenticação do usuário
+    const session = await getSession();
+
+    if (!session || !session.user) {
+      return NextResponse.json(
+        { error: "Authentication required" },
+        { status: 401 }
+      );
+    }
+
+    // Verificar se o serviço é permitido
+    const allowedServices = ["maps", "search", "recommendations"];
+
+    if (!allowedServices.includes(params.service)) {
+      return NextResponse.json({ error: "Invalid service" }, { status: 400 });
+    }
+
+    // Gerar chave temporária com permissões limitadas
+    const { key, expiresAt } = await generateTemporaryApiKey({
+      service: params.service,
+      userId: session.user.id,
+      expiryMinutes: 60, // 1 hora
+    });
+
+    return NextResponse.json({ key, expiresAt });
+  } catch (error) {
+    console.error("Error generating API key:", error);
+
+    return NextResponse.json(
+      { error: "Failed to generate API key" },
+      { status: 500 }
+    );
+  }
+}
+```
+
+Estas implementações fornecem uma base robusta para lidar com timeouts, monitoramento e gerenciamento seguro de chaves de API em cenários de data fetching no Next.js, abordando as áreas de melhoria identificadas na revisão.
+
 ## Anti-padrões a Evitar
 
 1. **❌ Fetching de Dados em Client Components Quando Possível no Servidor**
@@ -1513,6 +2188,7 @@ async function PopularProductsContainer() {
    ✅ Correto: Tratar erros e fornecer fallbacks ou redirecionamentos
 
 5. **❌ Revalidação Excessiva ou Insuficiente**
+
    ```typescript
    // Incorreto: Invalidando cache de forma ampla demais
    export async function createComment(formData: FormData) {
@@ -1522,6 +2198,7 @@ async function PopularProductsContainer() {
      revalidatePath("/");
    }
    ```
+
    ✅ Correto: Invalidar apenas as rotas ou tags necessárias
 
 ## Configuração do ESLint Recomendada

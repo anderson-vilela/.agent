@@ -744,194 +744,298 @@ export function ThemeToggle() {
 }
 ```
 
-## Padrões de Otimização
+## Gestão de Estado Avançada
 
-### Uso de React.memo para Componentes Pesados
-
-```typescript
-// components/data-table/DataTable.tsx
-"use client";
-
-import React from "react";
-import {
-  useReactTable,
-  getCoreRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  getFilteredRowModel,
-  ColumnDef,
-  SortingState,
-  VisibilityState,
-} from "@tanstack/react-table";
-
-interface DataTableProps<TData, TValue> {
-  columns: ColumnDef<TData, TValue>[];
-  data: TData[];
-  defaultSort?: SortingState;
-}
-
-// Utilizando React.memo para evitar re-renders desnecessários
-export const DataTable = React.memo(function DataTable<TData, TValue>({
-  columns,
-  data,
-  defaultSort = [],
-}: DataTableProps<TData, TValue>) {
-  const [sorting, setSorting] = React.useState<SortingState>(defaultSort);
-  const [columnVisibility, setColumnVisibility] =
-    React.useState<VisibilityState>({});
-  const [rowSelection, setRowSelection] = React.useState({});
-  const [globalFilter, setGlobalFilter] = React.useState("");
-
-  const table = useReactTable({
-    data,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    onSortingChange: setSorting,
-    onColumnVisibilityChange: setColumnVisibility,
-    onRowSelectionChange: setRowSelection,
-    onGlobalFilterChange: setGlobalFilter,
-    state: {
-      sorting,
-      columnVisibility,
-      rowSelection,
-      globalFilter,
-    },
-  });
-
-  // Renderização da tabela...
-  return <div className="space-y-4">{/* Implementação da tabela */}</div>;
-});
-```
-
-### Lazy Loading com dynamic imports
+### 7. Gerenciamento de Estado com Zustand
 
 ```typescript
-// app/dashboard/_components/Analytics.tsx
+// lib/stores/useCartStore.ts
 "use client";
 
-import dynamic from "next/dynamic";
-import { Suspense } from "react";
-import { Loader2 } from "lucide-react";
+import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 
-// Import dinâmico com lazy loading para o componente de gráficos
-const Chart = dynamic(() => import("@/components/charts/Chart"), {
-  loading: () => (
-    <div className="h-80 flex items-center justify-center">
-      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-    </div>
-  ),
-  ssr: false, // Previne SSR para bibliotecas que dependem do navegador
-});
-
-export function Analytics({ data }) {
-  return (
-    <div className="rounded-lg border p-6">
-      <h2 className="text-xl font-semibold mb-4">Análise de Desempenho</h2>
-      <div className="h-80">
-        <Chart data={data} />
-      </div>
-    </div>
-  );
-}
-```
-
-### Otimização com useCallback e useMemo
-
-```typescript
-// app/_components/FilterableList.tsx
-"use client";
-
-import { useState, useMemo, useCallback } from "react";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-
-interface Item {
+interface Product {
   id: string;
   name: string;
-  category: string;
+  price: number;
+  imageUrl: string;
 }
 
-interface FilterableListProps {
-  items: Item[];
-  onItemSelect: (item: Item) => void;
+interface CartItem extends Product {
+  quantity: number;
 }
 
-export function FilterableList({ items, onItemSelect }: FilterableListProps) {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
+interface CartState {
+  items: CartItem[];
+  totalItems: number;
+  totalPrice: number;
+  addItem: (product: Product) => void;
+  removeItem: (productId: string) => void;
+  updateQuantity: (productId: string, quantity: number) => void;
+  clearCart: () => void;
+}
 
-  // Filtragem memoizada para prevenir recálculos desnecessários
-  const filteredItems = useMemo(() => {
-    return items.filter((item) => {
-      const matchesSearch = item.name
-        .toLowerCase()
-        .includes(searchTerm.toLowerCase());
-      const matchesCategory =
-        !categoryFilter || item.category === categoryFilter;
-      return matchesSearch && matchesCategory;
-    });
-  }, [items, searchTerm, categoryFilter]);
+export const useCartStore = create<CartState>()(
+  persist(
+    (set, get) => ({
+      items: [],
 
-  // Função estável entre renders para manipular seleção
-  const handleItemClick = useCallback(
-    (item: Item) => {
-      onItemSelect(item);
-    },
-    [onItemSelect]
+      // Valores calculados derivados do estado
+      totalItems: 0,
+      totalPrice: 0,
+
+      // Ações para modificar o estado
+      addItem: (product) => {
+        const currentItems = get().items;
+        const existingItem = currentItems.find(
+          (item) => item.id === product.id
+        );
+
+        if (existingItem) {
+          // Atualiza quantidade se o item já existe
+          const updatedItems = currentItems.map((item) =>
+            item.id === product.id
+              ? { ...item, quantity: item.quantity + 1 }
+              : item
+          );
+
+          set((state) => ({
+            items: updatedItems,
+            totalItems: state.totalItems + 1,
+            totalPrice: state.totalPrice + product.price,
+          }));
+        } else {
+          // Adiciona novo item
+          const newItem = { ...product, quantity: 1 };
+
+          set((state) => ({
+            items: [...state.items, newItem],
+            totalItems: state.totalItems + 1,
+            totalPrice: state.totalPrice + product.price,
+          }));
+        }
+      },
+
+      removeItem: (productId) => {
+        const currentItems = get().items;
+        const itemToRemove = currentItems.find((item) => item.id === productId);
+
+        if (!itemToRemove) return;
+
+        set((state) => ({
+          items: state.items.filter((item) => item.id !== productId),
+          totalItems: state.totalItems - itemToRemove.quantity,
+          totalPrice:
+            state.totalPrice - itemToRemove.price * itemToRemove.quantity,
+        }));
+      },
+
+      updateQuantity: (productId, quantity) => {
+        if (quantity < 1) {
+          get().removeItem(productId);
+          return;
+        }
+
+        const currentItems = get().items;
+        const itemToUpdate = currentItems.find((item) => item.id === productId);
+
+        if (!itemToUpdate) return;
+
+        const quantityDiff = quantity - itemToUpdate.quantity;
+
+        set((state) => ({
+          items: state.items.map((item) =>
+            item.id === productId ? { ...item, quantity } : item
+          ),
+          totalItems: state.totalItems + quantityDiff,
+          totalPrice: state.totalPrice + itemToUpdate.price * quantityDiff,
+        }));
+      },
+
+      clearCart: () => set({ items: [], totalItems: 0, totalPrice: 0 }),
+    }),
+    {
+      name: "cart-storage", // nome para armazenamento no localStorage
+      storage: createJSONStorage(() => localStorage),
+    }
+  )
+);
+```
+
+#### Exemplo de uso do store em componentes:
+
+```typescript
+// app/(shop)/_components/AddToCartButton.tsx
+"use client";
+
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { useCartStore } from "@/lib/stores/useCartStore";
+import { toast } from "@/components/ui/use-toast";
+
+interface AddToCartButtonProps {
+  product: {
+    id: string;
+    name: string;
+    price: number;
+    imageUrl: string;
+  };
+}
+
+export function AddToCartButton({ product }: AddToCartButtonProps) {
+  const [isAdding, setIsAdding] = useState(false);
+  const addItem = useCartStore((state) => state.addItem);
+
+  function handleAddToCart() {
+    setIsAdding(true);
+
+    setTimeout(() => {
+      addItem(product);
+
+      toast({
+        title: "Produto adicionado",
+        description: `${product.name} foi adicionado ao carrinho`,
+        variant: "success",
+      });
+
+      setIsAdding(false);
+    }, 500); // Simulação de delay para feedback visual
+  }
+
+  return (
+    <Button onClick={handleAddToCart} disabled={isAdding} className="w-full">
+      {isAdding ? "Adicionando..." : "Adicionar ao Carrinho"}
+    </Button>
   );
+}
+```
 
-  // Lista de categorias únicas
-  const categories = useMemo(() => {
-    return Array.from(new Set(items.map((item) => item.category)));
-  }, [items]);
+```typescript
+// app/(shop)/_components/CartWidget.tsx
+"use client";
+
+import { ShoppingCart } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useCartStore } from "@/lib/stores/useCartStore";
+
+export function CartWidget() {
+  const totalItems = useCartStore((state) => state.totalItems);
+
+  return (
+    <Button variant="ghost" size="icon" aria-label="Carrinho de compras">
+      <div className="relative">
+        <ShoppingCart className="h-6 w-6" />
+        {totalItems > 0 && (
+          <Badge
+            variant="destructive"
+            className="absolute -top-2 -right-2 h-5 w-5 flex items-center justify-center p-0 text-xs"
+          >
+            {totalItems > 99 ? "99+" : totalItems}
+          </Badge>
+        )}
+      </div>
+    </Button>
+  );
+}
+```
+
+### Vantagens do Zustand sobre Context API
+
+1. **API Mais Simples**: Menos boilerplate e mais intuitivo que Context + useReducer
+2. **Performance Superior**: Atualizações seletivas via selectors para evitar re-renders desnecessários
+3. **Sem Providers**: Não precisa envolver componentes em providers, facilitando o acesso ao estado
+4. **Middleware Integrado**: Sistema de middleware para persistência, imutabilidade e devtools
+5. **TypeScript Nativo**: Excelente suporte para TypeScript com inferência de tipos
+6. **Bundle Size Pequeno**: Menos de 1KB (minificado + gzipped)
+7. **DevTools**: Integração fácil com Redux DevTools
+8. **Compatibilidade com React 18**: Suporte completo para Concurrent Mode e Suspense
+
+### Escolhendo entre Context API e Zustand
+
+| Context API                                  | Zustand                                                |
+| -------------------------------------------- | ------------------------------------------------------ |
+| Embutido no React                            | Biblioteca externa                                     |
+| Ideal para temas, autenticação, preferências | Ideal para estado complexo, com múltiplas atualizações |
+| Melhor para estado raramente atualizado      | Melhor para estado frequentemente atualizado           |
+| Pode causar re-renders desnecessários        | Atualizações seletivas para evitar re-renders          |
+| Precisa de providers aninhados               | Sem providers necessários                              |
+| Sem persistência nativa                      | Persistência integrada via middleware                  |
+
+### Zustand com Server Components
+
+Como Zustand é utilizado no lado do cliente, certifique-se de usar a diretiva 'use client' quando necessário:
+
+```typescript
+// app/_components/CartSummary.tsx
+"use client";
+
+import { useCartStore } from "@/lib/stores/useCartStore";
+
+export function CartSummary() {
+  const { items, totalItems, totalPrice } = useCartStore();
+
+  if (totalItems === 0) {
+    return <p>Seu carrinho está vazio</p>;
+  }
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">
-        <Input
-          placeholder="Buscar itens..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="flex-1"
-        />
+      <h2 className="text-xl font-bold">Resumo do Carrinho</h2>
+      <p>{totalItems} item(s) no carrinho</p>
+      <p className="text-lg font-semibold">Total: R$ {totalPrice.toFixed(2)}</p>
+    </div>
+  );
+}
+```
 
-        <select
-          value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
-          className="border rounded px-3 py-2"
-        >
-          <option value="">Todas categorias</option>
-          {categories.map((category) => (
-            <option key={category} value={category}>
-              {category}
-            </option>
-          ))}
-        </select>
-      </div>
+### Integração com React Query para Dados Externos
 
-      <div className="border rounded divide-y">
-        {filteredItems.length === 0 ? (
-          <p className="p-4 text-center text-muted-foreground">
-            Nenhum item encontrado
-          </p>
-        ) : (
-          filteredItems.map((item) => (
-            <button
-              key={item.id}
-              className="w-full text-left p-4 hover:bg-muted/50 transition-colors"
-              onClick={() => handleItemClick(item)}
-            >
-              <div className="font-medium">{item.name}</div>
-              <div className="text-sm text-muted-foreground">
-                {item.category}
-              </div>
-            </button>
-          ))
-        )}
-      </div>
+Para gerenciamento de estado do servidor com React Query e Zustand:
+
+```typescript
+// lib/stores/useUserStore.ts
+import { create } from "zustand";
+import { User } from "@/types";
+
+interface UserState {
+  user: User | null;
+  setUser: (user: User | null) => void;
+}
+
+export const useUserStore = create<UserState>((set) => ({
+  user: null,
+  setUser: (user) => set({ user }),
+}));
+```
+
+```typescript
+// app/(authenticated)/_components/ProfileData.tsx
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import { useUserStore } from "@/lib/stores/useUserStore";
+import { fetchUserProfile } from "@/lib/api/users";
+
+export function ProfileData() {
+  const { user, setUser } = useUserStore();
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["userProfile"],
+    queryFn: fetchUserProfile,
+    onSuccess: (data) => {
+      setUser(data);
+    },
+  });
+
+  if (isLoading) return <div>Carregando...</div>;
+  if (error) return <div>Erro ao carregar perfil</div>;
+
+  return (
+    <div>
+      <h2>Perfil de {user?.name}</h2>
+      {/* Resto do componente */}
     </div>
   );
 }
@@ -1045,6 +1149,7 @@ export function FilterableList({ items, onItemSelect }: FilterableListProps) {
    ✅ Correto: Usar useMemo para memoizar objetos estáveis entre renders
 
 5. **❌ Não Utilizando Ferramentas de Otimização**
+
    ```typescript
    // Incorreto: Componente pesado sem memoização
    function LargeDataTable({ data, onRowClick }) {
@@ -1054,6 +1159,7 @@ export function FilterableList({ items, onItemSelect }: FilterableListProps) {
      return <table>{/* Renderização da tabela... */}</table>;
    }
    ```
+
    ✅ Correto: Usar React.memo, useMemo e useCallback para otimizar performance
 
 ## Configuração do ESLint Recomendada
@@ -1082,3 +1188,702 @@ export function FilterableList({ items, onItemSelect }: FilterableListProps) {
 - Em componentes que necessitam acessar APIs exclusivas do navegador
 - Para integrações com bibliotecas que requerem acesso à DOM ou APIs do navegador
 - Quando precisar manter estado local que não afeta o renderização do servidor
+
+## Performance Metrics e Monitoramento
+
+### Medindo e Monitorando Performance de Client Components
+
+Para garantir que os Client Components entreguem uma experiência otimizada, é essencial medir e monitorar seu desempenho. A seguir, apresentamos estratégias recomendadas:
+
+#### 1. Web Vitals
+
+```typescript
+// app/_components/WebVitalsReporter.tsx
+"use client";
+
+import { useReportWebVitals } from "next/web-vitals";
+import { useEffect } from "react";
+
+export function WebVitalsReporter() {
+  useReportWebVitals((metric) => {
+    // Exemplo de envio para serviço de analytics
+    const body = JSON.stringify(metric);
+
+    // Usando Beacon API quando disponível
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon("/api/analytics/web-vitals", body);
+    } else {
+      // Fallback para fetch
+      fetch("/api/analytics/web-vitals", {
+        body,
+        method: "POST",
+        keepalive: true,
+      });
+    }
+
+    // Log durante desenvolvimento
+    if (process.env.NODE_ENV === "development") {
+      console.log(`Web Vital: ${metric.name}`, metric);
+    }
+  });
+
+  return null;
+}
+```
+
+Integre este componente no layout raiz:
+
+```typescript
+// app/layout.tsx
+import { WebVitalsReporter } from "./_components/WebVitalsReporter";
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="pt-BR">
+      <body>
+        {children}
+        <WebVitalsReporter />
+      </body>
+    </html>
+  );
+}
+```
+
+#### 2. Uso da React Profiler API
+
+Para componentes críticos e com muita interatividade, use a Profiler API do React para medir o tempo de renderização:
+
+```typescript
+// app/_components/ProfiledComponent.tsx
+"use client";
+
+import { Profiler, ProfilerOnRenderCallback } from "react";
+
+const onRender: ProfilerOnRenderCallback = (
+  id,
+  phase,
+  actualDuration,
+  baseDuration,
+  startTime,
+  commitTime
+) => {
+  // Enviar para sistema de monitoramento
+  if (actualDuration > 16) {
+    // Mais de 1 frame (16.67ms)
+    console.warn(
+      `Componente ${id} levou ${actualDuration.toFixed(2)}ms para renderizar`
+    );
+
+    // Exemplo: enviar para sistema de monitoramento
+    reportPerformanceIssue({
+      componentId: id,
+      actualDuration,
+      baseDuration,
+      timestamp: new Date().toISOString(),
+    });
+  }
+};
+
+export function ProfiledDataTable({ data }) {
+  return (
+    <Profiler id="DataTable" onRender={onRender}>
+      <DataTable data={data} />
+    </Profiler>
+  );
+}
+
+// Função fictícia para relatar problemas
+function reportPerformanceIssue(data: any) {
+  // Implementação real enviaria para New Relic, Datadog, etc.
+  console.info("Performance issue reported:", data);
+}
+```
+
+#### 3. Ferramenta de Monitoramento de Re-renderizações
+
+```typescript
+// lib/hooks/useRenderCounter.ts
+"use client";
+
+import { useRef, useEffect } from "react";
+
+export function useRenderCounter(componentName: string, threshold: number = 3) {
+  const renderCount = useRef(0);
+
+  useEffect(() => {
+    renderCount.current += 1;
+
+    if (
+      renderCount.current > threshold &&
+      process.env.NODE_ENV === "development"
+    ) {
+      console.warn(
+        `%c${componentName} re-renderizou ${renderCount.current} vezes`,
+        "color: orange; font-weight: bold;"
+      );
+    }
+
+    return () => {
+      // Reset em componentWillUnmount para evitar alertas falsos
+      renderCount.current = 0;
+    };
+  });
+
+  return renderCount.current;
+}
+```
+
+#### 4. Integração com ferramentas de observabilidade
+
+```typescript
+// lib/monitoring/index.ts
+export function trackComponentPerformance(data: {
+  componentName: string;
+  renderTime: number;
+  eventType: "mount" | "update" | "unmount";
+  additionalData?: Record<string, any>;
+}) {
+  // Em produção, integre com Sentry, New Relic, Datadog, etc.
+  if (process.env.NODE_ENV === "production") {
+    // Exemplo de integração com Sentry
+    if (typeof window !== "undefined" && window.Sentry) {
+      window.Sentry.addBreadcrumb({
+        category: "performance",
+        message: `Componente ${data.componentName} ${data.eventType} em ${data.renderTime}ms`,
+        level: data.renderTime > 50 ? "warning" : "info",
+        data: data.additionalData,
+      });
+
+      if (data.renderTime > 100) {
+        window.Sentry.captureMessage(
+          `Componente lento detectado: ${data.componentName}`,
+          "warning"
+        );
+      }
+    }
+  }
+}
+```
+
+### Estratégias para Mobile-First e Otimização de Dispositivos Móveis
+
+Em um mundo onde mais de 60% do tráfego web vem de dispositivos móveis, otimizar Client Components para estas plataformas é essencial.
+
+#### 1. Code Splitting Responsivo
+
+```typescript
+// app/_components/ProductGallery.tsx
+"use client";
+
+import dynamic from "next/dynamic";
+import { useMediaQuery } from "@/lib/hooks/useMediaQuery";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// Versão leve para dispositivos móveis
+const MobileGallery = dynamic(() => import("./MobileGallery"), {
+  loading: () => <Skeleton className="h-[300px] w-full rounded-lg" />,
+});
+
+// Versão completa para desktop
+const DesktopGallery = dynamic(() => import("./DesktopGallery"), {
+  loading: () => <Skeleton className="h-[500px] w-full rounded-lg" />,
+});
+
+export function ProductGallery({ images }) {
+  const isMobile = useMediaQuery("(max-width: 768px)");
+
+  return isMobile ? (
+    <MobileGallery images={images} />
+  ) : (
+    <DesktopGallery images={images} />
+  );
+}
+```
+
+Hook de media query:
+
+```typescript
+// lib/hooks/useMediaQuery.ts
+"use client";
+
+import { useState, useEffect } from "react";
+
+export function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const media = window.matchMedia(query);
+
+      // Definir valor inicial
+      setMatches(media.matches);
+
+      // Callback para mudanças
+      const listener = (e: MediaQueryListEvent) => {
+        setMatches(e.matches);
+      };
+
+      // Adicionar listener
+      if (media.addEventListener) {
+        media.addEventListener("change", listener);
+      } else {
+        // Para navegadores mais antigos
+        media.addListener(listener);
+      }
+
+      // Cleanup
+      return () => {
+        if (media.removeEventListener) {
+          media.removeEventListener("change", listener);
+        } else {
+          // Para navegadores mais antigos
+          media.removeListener(listener);
+        }
+      };
+    }
+
+    // Valor padrão para SSR
+    return () => {};
+  }, [query]);
+
+  return matches;
+}
+```
+
+#### 2. Otimização de Interações Touch
+
+```typescript
+// lib/hooks/useSwipeGesture.ts
+"use client";
+
+import { useCallback, useRef } from "react";
+
+interface SwipeOptions {
+  onSwipeLeft?: () => void;
+  onSwipeRight?: () => void;
+  onSwipeUp?: () => void;
+  onSwipeDown?: () => void;
+  threshold?: number; // distância mínima em pixels
+}
+
+export function useSwipeGesture(options: SwipeOptions = {}) {
+  const { threshold = 50 } = options;
+
+  // Coordenadas iniciais do toque
+  const touchStart = useRef({ x: 0, y: 0 });
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStart.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+    };
+  }, []);
+
+  const handleTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      const touchEndX = e.changedTouches[0].clientX;
+      const touchEndY = e.changedTouches[0].clientY;
+
+      const deltaX = touchStart.current.x - touchEndX;
+      const deltaY = touchStart.current.y - touchEndY;
+
+      // Detectar direção com base na maior distância
+      if (Math.abs(deltaX) > Math.abs(deltaY)) {
+        // Movimento horizontal
+        if (Math.abs(deltaX) > threshold) {
+          if (deltaX > 0 && options.onSwipeLeft) {
+            options.onSwipeLeft();
+          } else if (deltaX < 0 && options.onSwipeRight) {
+            options.onSwipeRight();
+          }
+        }
+      } else {
+        // Movimento vertical
+        if (Math.abs(deltaY) > threshold) {
+          if (deltaY > 0 && options.onSwipeUp) {
+            options.onSwipeUp();
+          } else if (deltaY < 0 && options.onSwipeDown) {
+            options.onSwipeDown();
+          }
+        }
+      }
+    },
+    [options, threshold]
+  );
+
+  return {
+    handlers: {
+      onTouchStart: handleTouchStart,
+      onTouchEnd: handleTouchEnd,
+    },
+  };
+}
+```
+
+Exemplo de uso:
+
+```typescript
+// app/(shop)/_components/ProductCarousel.tsx
+"use client";
+
+import { useState } from "react";
+import { useSwipeGesture } from "@/lib/hooks/useSwipeGesture";
+
+export function ProductCarousel({ products }) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  const nextSlide = () => {
+    setCurrentIndex((prev) => (prev + 1) % products.length);
+  };
+
+  const prevSlide = () => {
+    setCurrentIndex((prev) => (prev - 1 + products.length) % products.length);
+  };
+
+  const { handlers } = useSwipeGesture({
+    onSwipeLeft: nextSlide,
+    onSwipeRight: prevSlide,
+  });
+
+  return (
+    <div className="relative overflow-hidden w-full" {...handlers}>
+      <div
+        className="flex transition-transform duration-300 ease-in-out"
+        style={{ transform: `translateX(-${currentIndex * 100}%)` }}
+      >
+        {products.map((product) => (
+          <div key={product.id} className="w-full flex-shrink-0 p-4">
+            <img
+              src={product.imageUrl}
+              alt={product.name}
+              className="w-full h-auto object-cover rounded-lg"
+            />
+          </div>
+        ))}
+      </div>
+
+      {/* Indicadores e controles */}
+    </div>
+  );
+}
+```
+
+#### 3. Otimizações de Input para Dispositivos Móveis
+
+```typescript
+// app/(shop)/_components/SearchInput.tsx
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+import { Search, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { useDebounce } from "@/lib/hooks/useDebounce";
+
+export function SearchInput({ onSearch }) {
+  const [query, setQuery] = useState("");
+  const [isFocused, setIsFocused] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const debouncedQuery = useDebounce(query, 300);
+
+  // Efeito para aplicar a busca após o debounce
+  useEffect(() => {
+    if (debouncedQuery) {
+      onSearch(debouncedQuery);
+    }
+  }, [debouncedQuery, onSearch]);
+
+  // Otimizações para teclado móvel
+  const handleFocus = () => {
+    setIsFocused(true);
+    // Scroll para manter o input visível quando o teclado abre
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.scrollIntoView({ behavior: "smooth" });
+      }
+    }, 100);
+  };
+
+  const handleClear = () => {
+    setQuery("");
+    inputRef.current?.focus();
+    onSearch("");
+  };
+
+  return (
+    <div
+      className={`relative transition-all duration-200 ${
+        isFocused ? "w-full" : "w-3/4"
+      }`}
+    >
+      <Input
+        ref={inputRef}
+        type="search"
+        placeholder="Buscar produtos..."
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onFocus={handleFocus}
+        onBlur={() => setIsFocused(false)}
+        className="pr-8"
+        // Melhorar experiência em dispositivos móveis
+        inputMode="search"
+        enterKeyHint="search"
+      />
+
+      {query && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="absolute right-0 top-0 h-full"
+          onClick={handleClear}
+          aria-label="Limpar busca"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      )}
+    </div>
+  );
+}
+```
+
+#### 4. Script de Monitoring de Performance
+
+```typescript
+// lib/monitoring/performance.ts
+export function initPerformanceMonitoring() {
+  if (typeof window === "undefined") return;
+
+  // Capturar FID (First Input Delay)
+  const onFirstInputDelay = (entry: PerformanceEventTiming) => {
+    // Capture e reporta o tempo de resposta ao primeiro input
+    if (entry.processingStart && entry.startTime) {
+      const inputDelay = entry.processingStart - entry.startTime;
+
+      if (inputDelay > 100) {
+        console.warn(`Alto First Input Delay: ${inputDelay.toFixed(2)}ms`);
+        // Enviar para sistema de monitoramento
+      }
+    }
+  };
+
+  // Capturar LCP (Largest Contentful Paint)
+  const onLargestContentfulPaint = (entry: PerformanceEntry) => {
+    // @ts-ignore - LCP não está completamente tipado no TypeScript padrão
+    const lcp = entry.startTime;
+
+    if (lcp > 2500) {
+      console.warn(`LCP lento: ${lcp.toFixed(2)}ms`);
+      // Enviar para sistema de monitoramento
+    }
+  };
+
+  // Capturar CLS (Cumulative Layout Shift)
+  const onLayoutShift = (entry: PerformanceEntry) => {
+    // @ts-ignore - Layout Shift não está completamente tipado no TypeScript padrão
+    if (entry.value > 0.1) {
+      console.warn(`Layout shift significativo: ${entry.value.toFixed(3)}`);
+      // Enviar para sistema de monitoramento
+    }
+  };
+
+  // Registrar observadores se a API estiver disponível
+  if ("PerformanceObserver" in window) {
+    try {
+      // FID observer
+      new PerformanceObserver((entryList) => {
+        for (const entry of entryList.getEntries()) {
+          onFirstInputDelay(entry as PerformanceEventTiming);
+        }
+      }).observe({ type: "first-input", buffered: true });
+
+      // LCP observer
+      new PerformanceObserver((entryList) => {
+        for (const entry of entryList.getEntries()) {
+          onLargestContentfulPaint(entry);
+        }
+      }).observe({ type: "largest-contentful-paint", buffered: true });
+
+      // CLS observer
+      new PerformanceObserver((entryList) => {
+        for (const entry of entryList.getEntries()) {
+          onLayoutShift(entry);
+        }
+      }).observe({ type: "layout-shift", buffered: true });
+    } catch (e) {
+      console.error("Erro ao configurar PerformanceObserver", e);
+    }
+  }
+}
+```
+
+Para utilizar este script, adicione-o ao seu layout principal:
+
+```typescript
+// app/layout.tsx
+"use client";
+
+import { useEffect } from "react";
+import { initPerformanceMonitoring } from "@/lib/monitoring/performance";
+
+function PerformanceMonitor() {
+  useEffect(() => {
+    initPerformanceMonitoring();
+  }, []);
+
+  return null;
+}
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="pt-BR">
+      <body>
+        {children}
+        <PerformanceMonitor />
+      </body>
+    </html>
+  );
+}
+```
+
+### Implications de SSR vs CSR
+
+É crucial entender as implicações de Server-Side Rendering (SSR) versus Client-Side Rendering (CSR) ao trabalhar com Client Components no Next.js:
+
+#### 1. O Ciclo de Hidratação
+
+Client Components passam por um processo de hidratação após serem renderizados no servidor. Isso pode levar a problemas como:
+
+```typescript
+// app/_components/HydrationAwareComponent.tsx
+"use client";
+
+import { useState, useEffect } from "react";
+
+export function HydrationAwareComponent({ initialData }) {
+  // Problema: valores diferentes entre servidor e cliente
+  const [isClient, setIsClient] = useState(false);
+  const [data, setData] = useState(initialData);
+
+  // Solução: usar useEffect para atualizar estado apenas no cliente
+  useEffect(() => {
+    setIsClient(true);
+
+    // Agora é seguro usar lógica específica do cliente
+    if (typeof window !== "undefined") {
+      const savedData = localStorage.getItem("userData");
+      if (savedData) {
+        try {
+          setData(JSON.parse(savedData));
+        } catch (e) {
+          console.error("Erro ao parsear dados salvos", e);
+        }
+      }
+    }
+  }, []);
+
+  // Evitar erros de hidratação usando a mesma saída do servidor
+  // até que o cliente esteja totalmente hidratado
+  if (!isClient) {
+    return <div>{initialData.summary}</div>;
+  }
+
+  return (
+    <div>
+      <h3>{data.title}</h3>
+      <p>{data.summary}</p>
+      {isClient && (
+        <button onClick={() => console.log("Clicado!")}>
+          Interagir (disponível apenas após hidratação)
+        </button>
+      )}
+    </div>
+  );
+}
+```
+
+#### 2. Estratégias para Evitar Erros de Hidratação
+
+```typescript
+// lib/hooks/useSafeLayoutEffect.ts
+"use client";
+
+import { useEffect, useLayoutEffect } from "react";
+
+// Versão segura de useLayoutEffect que não causa alertas em SSR
+export const useSafeLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
+```
+
+```typescript
+// app/_components/ClientOnlyPortal.tsx
+"use client";
+
+import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
+
+export function ClientOnlyPortal({ children, selector }) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
+
+  // Não renderiza nada no servidor
+  if (!mounted) return null;
+
+  // No cliente, render como Portal
+  const element = document.querySelector(selector);
+  if (!element) return null;
+
+  return createPortal(children, element);
+}
+```
+
+#### 3. Progressive Hydration
+
+```typescript
+// app/_components/ProgressiveHydration.tsx
+"use client";
+
+import { useState, useEffect, Suspense } from "react";
+import { useInView } from "react-intersection-observer";
+
+export function ProgressiveHydration({
+  children,
+  fallback,
+  triggerOnce = true,
+}) {
+  const { ref, inView } = useInView({
+    triggerOnce,
+    rootMargin: "200px", // Pré-carrega quando estiver a 200px da viewport
+  });
+
+  return (
+    <div ref={ref}>
+      {inView ? <Suspense fallback={fallback}>{children}</Suspense> : fallback}
+    </div>
+  );
+}
+```
+
+Exemplo de uso:
+
+```tsx
+<ProgressiveHydration fallback={<ProductCardSkeleton />}>
+  <ProductRecommendations />
+</ProgressiveHydration>
+```
+
+Estas estratégias ajudam a otimizar a performance e a experiência do usuário em dispositivos móveis e lidar com os desafios de hidratação em aplicações Next.js.
+
+## Padrões de Otimização
