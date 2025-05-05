@@ -1,6 +1,13 @@
 # Estrutura de Pastas para Documentação de Projeto
 
-Aqui está uma proposta de estrutura de pastas para o seu diretório `.agent`, organizada de acordo com os workflows e documentos que você mencionou:
+Aqui está uma proposta de estrutura de pastas para o seu diretório, organizada de acordo com os workflows e documentos relevantes:
+
+> 📁 [Documentação de Projeto](../1-documentation/sobre.md)
+> 📁 [Implementação](../2-implementation/sobre.md)
+> 📁 [Code Review](../3-code-review/sobre.md)
+> 📁 [Correção de Bugs](../4-fix-bugs/sobre.md)
+> 📁 [Refinamento de Ideias](../5-idea-refinement/sobre.md)
+> 📁 [Descoberta de Soluções](../6-solution-discovery/sobre.md)
 
 ```
 template-agent/
@@ -278,6 +285,15 @@ template-agent/
         ├── 003-iteracoes-produto/          # Iterações do produto
         └── 004-estrategia-escala/          # Estratégia de escala
 ```
+
+## Instruções para uso da estrutura
+
+> 📄 [Workflow de Documentação](1-workflow-documentation-process.md)
+> 📄 [Workflow de Implementação](2-workflow-implementation-process.md)
+> 📄 [Workflow de Code Review](3-workflow-code-review-process.md)
+> 📄 [Workflow de Correção de Bugs](4-workflow-fix-bugs-process.md)
+> 📄 [Workflow de Refinamento de Ideias](5-workflow-idea-refinement-process.md)
+> 📄 [Workflow de Descoberta de Soluções](6-workflow-solution-discovery-process.md)
 
 Nesta estrutura:
 
